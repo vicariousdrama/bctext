@@ -1,9 +1,9 @@
 # bctext
-A simple utility for passing text to a Blockclock Mini with convenient formatting control
+A simple utility written in Go for passing text to a Blockclock Mini with convenient formatting control
 
 There are currently a few command line options that can be provided
 ```c
-Usage of /tmp/go-build1211294237/b001/exe/main:
+Usage of bctext:
   -blockclockip string
         Blockclock IP Address (default "21.21.21.21")
   -debugmode
