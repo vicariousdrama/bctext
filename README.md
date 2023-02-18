@@ -1,6 +1,9 @@
 # bctext
 A simple utility written in Go for passing text to a Blockclock Mini with convenient formatting control
 
+![image](https://user-images.githubusercontent.com/88121568/219843205-f2cb051d-a857-4f10-bec2-b197fedfe9d8.png)
+
+
 ## Clone, build, install
 ```
 git clone https://github.com/vicariousdrama/bctext.git
