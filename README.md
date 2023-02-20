@@ -4,15 +4,14 @@ A simple utility written in Go for passing text to a Blockclock Mini with conven
 ![image](https://user-images.githubusercontent.com/88121568/219843205-f2cb051d-a857-4f10-bec2-b197fedfe9d8.png)
 
 
-## Clone, build, install
+## Clone, build
 ```
 git clone https://github.com/vicariousdrama/bctext.git
 cd bctext
 go build
-sudo install -m 0755 -o root -g root -t /usr/local/bin bctext
 ```
 
-If you want a smaller binary, you can build with
+If you want a smaller binary, you can build with the following on linux
 ```
 GOOS=linux go build -ldflags="-s -w"
 upx --brute bctext
