@@ -1,233 +1,277 @@
 package main
 
 import (
-        "flag"
-        "fmt"
-        "log"
-        "net/http"
-        "strings"
+	"flag"
+	"fmt"
+	"log"
+	"net/http"
+	"strings"
 )
 
 var (
-        charWidthMap map[int]int
-        debug bool
-        align bool
-        nopad bool
-        blockclockip string
-        texttoshow string
+	characterWidthMap map[int]int
+	debug             bool
+	align             bool
+	nopad             bool
+	blockclockip      string
+	texttoshow        string
+	eInkWidth         int
 )
+
 func init() {
-        charWidthMap = map[int]int{}
-        flag.StringVar(&blockclockip, "blockclockip", "21.21.21.21", "Blockclock IP Address")
-        flag.StringVar(&texttoshow, "texttoshow", "This is sample output created with bctext by vicariousdrama", "Text to Show")
-        flag.BoolVar(&align, "wordalign", false, "Avoid breaking word over panels, starting with next panel for each word")
-        flag.BoolVar(&nopad, "nopadding", false, "Controls whether periods should be added to pad out the text in panels to edges. With no padding, data in panels is centered")
-        flag.BoolVar(&debug, "debugmode", false, "Show data, dont send to blockclock")
+	characterWidthMap = map[int]int{}
+	eInkWidth = 128
+	flag.StringVar(&blockclockip, "blockclockip", "21.21.21.21", "Blockclock IP Address")
+	flag.StringVar(&texttoshow, "texttoshow", "This is sample output created with bctext by vicariousdrama", "Text to Show")
+	flag.BoolVar(&align, "wordalign", false, "Avoid breaking word over panels, starting with next panel for each word")
+	flag.BoolVar(&nopad, "nopadding", false, "Controls whether periods should be added to pad out the text in panels to edges. With no padding, data in panels is centered")
+	flag.BoolVar(&debug, "debugmode", false, "Show data, dont send to blockclock")
+	initCharacterWidthMap()
 }
-func getstringwidth(s string) (string, int) {
-        width := 0
-        s2 := ""
-        l := len(s)
-        for i := 0; i < l; i++ {
-                ch := s[i]
-                chi := int(ch)
-                chs, chw := getcharacterwidth(chi)
-                s2 += chs
-                width += chw
-        }
-        return s2, width
+func getStringWidthInPixels(s string) (string, int) {
+	width := 0
+	s2 := ""
+	l := len(s)
+	for i := 0; i < l; i++ {
+		ch := s[i]
+		chi := int(ch)
+		chs, chw := getCharacterWidthInPixels(chi)
+		s2 += chs
+		width += chw
+	}
+	return s2, width
 }
-func getcharacterwidth(chr int) (string, int) {
-        dVal := '.' // convert unmapped to a period
-        val, ok := charWidthMap[chr]
-        if ok {
-                return string(chr), val
-        }
-        val, ok = charWidthMap[int(dVal)]
-        if chr == 32 {
-                return strings.Repeat(string(dVal),2), val*2
-        }
-        return string(dVal), val
+func getCharacterWidthInPixels(chr int) (string, int) {
+	// lookup in the map
+	val, ok := characterWidthMap[chr]
+	if ok {
+		return string(chr), val
+	}
+	// all others will be defaulted to periods instead
+	dVal := '.'
+	val, ok = characterWidthMap[int(dVal)]
+	// but convert spaces to 2 periods
+	if chr == 32 {
+		return strings.Repeat(string(dVal), 2), val * 2
+	}
+	return string(dVal), val
 }
-func addperiodstoend(s string, m int) (string) {
-        for true {
-                _, w := getstringwidth(s)
-                a := m - w
-                if a > 12 { // period width
-                        s = fmt.Sprintf("%s.",s)
-                } else {
-                        break
-                }
-        }
-        return s
+func fillAvailableSpaceWithPeriods(s string, maxWidth int) string {
+	_, periodWidth := getCharacterWidthInPixels(int('.'))
+	for true {
+		_, currentWidth := getStringWidthInPixels(s)
+		availableWidth := maxWidth - currentWidth
+		if availableWidth > periodWidth {
+			s += "."
+		} else {
+			break
+		}
+	}
+	return s
+}
+func initCharacterWidthMap() {
+	// character map setup (based on eink width of 128px)
+	// letters A..Z
+	for c := 'A'; c <= 'Z'; c++ {
+		characterWidthMap[int(c)] = 25
+	}
+	// letter exceptions
+	characterWidthMap['I'] = 13
+	characterWidthMap['J'] = 20
+	characterWidthMap['M'] = 32
+	characterWidthMap['W'] = 32
+	// numbers 0..9
+	for c := '0'; c <= '9'; c++ {
+		characterWidthMap[int(c)] = 25
+	}
+	// symbols
+	characterWidthMap['+'] = 40
+	characterWidthMap[','] = 13 // note: additional space follows first in series
+	characterWidthMap['-'] = 18
+	characterWidthMap['.'] = 12 // note: additional space follows first in series
+	// no support for !, $, &, ', (, ), *, /, :, ;, <, =, >, ?, @, [, \, ], ^, _
+	// some others get urlencoded so we can't use: ", <, >, [, ], %
+}
+func renderDebugOutput(slots *[]string, panelCount int) {
+	slotMax := panelCount * 2
+	slotCount := len(*slots)
+	if slotCount < slotMax {
+		slotMax = slotCount
+	}
+	fmt.Println("Debug results for this text string")
+	fmt.Println("---------------------------------------------------------------------------------------")
+	fmt.Println(" slot      over            under       url")
+	for i := 0; i < slotMax && i < panelCount; i++ {
+		otext := (*slots)[i]
+		utext := ""
+		if (i + panelCount) < slotMax {
+			utext = (*slots)[i+panelCount]
+		}
+		url := fmt.Sprintf("http://%s/api/ou_text/%d/%s/%s", blockclockip, i, otext, utext)
+		fmt.Println(fmt.Sprintf("%5d  %-14s  %-14s  %s", i, otext, utext, url))
+	}
+}
+func renderToBlockclock(slots *[]string, panelCount int) {
+	slotMax := panelCount * 2
+	slotCount := len(*slots)
+	if slotCount < slotMax {
+		slotMax = slotCount
+	}
+	for i := 0; i < slotMax && i < panelCount; i++ {
+		otext := (*slots)[i]
+		utext := ""
+		if (i + panelCount) < slotMax {
+			utext = (*slots)[i+panelCount]
+		}
+		url := fmt.Sprintf("http://%s/api/ou_text/%d/%s/%s", blockclockip, i, otext, utext)
+		// TODO: Graceful handling of errors here instead of fatal
+		_, err := http.Get(url)
+		if err != nil {
+			log.Fatalln(err)
+		}
+	}
 }
 func main() {
-        // parse command line flags
-        flag.Parse()
-        pad := !(nopad)
+	// parse command line flags
+	flag.Parse()
+	pad := !(nopad)
 
-        // default to debugmode if the blockclock ip was not given
-        if (blockclockip == "21.21.21.21" || blockclockip == "") {
-                debug = true
-        }
+	// default to debugmode if the blockclock ip was not given
+	if blockclockip == "21.21.21.21" || blockclockip == "" {
+		debug = true
+	}
 
-        // character map setup (based on eink width of 128px)
-        // letters A..Z
-        for c := 'A'; c <= 'Z'; c++ {
-                charWidthMap[int(c)] = 25
-        }
-        // letter exceptions
-        charWidthMap['I'] = 13
-        charWidthMap['J'] = 20
-        charWidthMap['M'] = 32
-        charWidthMap['W'] = 32
-        // numbers 0..9
-        for c := '0'; c <= '9'; c++ {
-                charWidthMap[int(c)] = 25
-        }
-        // symbols
-        periodwidth := 12
-        charWidthMap['+'] = 40
-        charWidthMap[','] = 13          // note: additional space follows first in series
-        charWidthMap['-'] = 18
-        charWidthMap['.'] = periodwidth // note: additional space follows first in series
-        // no support for !, $, &, ', (, ), *, /, :, ;, <, =, >, ?, @, [, \, ], ^, _
-        // some others get urlencoded so we can't use: ", <, >, [, ], %
+	// panels - info about the eInk displays
+	panelCount := 7   //
+	panelWidth := 128 // the width of the eInk display in pixels
 
-        // panels - the number of eink displays
-        panelcount := 7
+	// slot setup
+	var slotMax = panelCount * 2 // two rows for over / under text
+	var slots []string           // start empty and add as needed
+	var slotIndex int = 0
+	slots = append(slots, "")
 
-        // slot setup
-        var slotmax = panelcount * 2    // two rows
-        var slotwidthmax = 128          // pixels
-        var slots []string              // our empty slot array, will add as needed and fill later
-        var slotidx int = 0
-        slots = append(slots, "",)
+	// for local convenience
+	convertedSpace, convertedSpaceWidth := getCharacterWidthInPixels(int(' '))
 
-        tts := strings.ToUpper(texttoshow)      // the blockclock mini doesnt support lowercase for over under text
-        ttswords := strings.Split(tts, " ")
-        ttswordscount := len(ttswords)
-        // process words of the string
-        for ttswidx, ttsword := range ttswords {
-                wordconverted, wordwidth := getstringwidth(ttsword)
-                wordlen := len(wordconverted)
-                if align && ttswidx > 0 {
-                        slotidx += 1
-                        slots = append(slots, "", )
-                }
-                currentslotcontent := slots[slotidx]
-                _, currentslotwidth := getstringwidth(currentslotcontent)
-                // track for two letters to avoid islanding single letter at end of slot
-                twoletterwidth := wordwidth
-                if wordlen >= 2 {
-                        _, twoletterwidth = getstringwidth(ttsword[0:2])
-                }
-                slotavail := slotwidthmax - currentslotwidth
-                rowavail := ((panelcount - (slotidx%panelcount) - 1) * slotwidthmax) + slotavail
-                // if small word and not enough space, or any word not enough space in the row.
-                if ((wordlen < 4) && (slotavail < wordwidth) && (currentslotwidth > 0)) ||
-                (slotavail < twoletterwidth) ||
-                (rowavail < wordwidth) {
-                        // advance to next slot
-                        if pad {
-                                slots[slotidx] = addperiodstoend(slots[slotidx],slotwidthmax)
-                        }
-                        slotidx += 1
-                        slots = append(slots, "", )
-                        if (rowavail < wordwidth) && (slotidx%panelcount != 0) {
-                                // advance slots as needed for next row
-                                for {
-                                        if pad {
-                                                slots[slotidx] = addperiodstoend(slots[slotidx],slotwidthmax)
-                                        }
-                                        slotidx += 1
-                                        slots = append(slots, "", )
-                                        if slotidx%panelcount == 0 {
-                                                break
-                                        } else if pad {
-                                                slots[slotidx] = addperiodstoend(slots[slotidx],slotwidthmax)
-                                        }
-                                }
-                        }
-                } else {
-                        // if at end of row and already has content, insert a space
-                        if (((slotidx+1)%panelcount)==0) && (currentslotwidth > 0) && (rowavail > periodwidth*2) {
-                                slots[slotidx] = fmt.Sprintf("%s%s",slots[slotidx],"..")
-                        }
-                }
-                // process characters of this word into slots
-                for charidx := 0; charidx < wordlen; charidx ++ {
-                        charcur := ttsword[charidx]
-                        charcuri := int(charcur)
-                        charstring, charwidth := getcharacterwidth(charcuri)
-                        currentslotcontent := slots[slotidx]
-                        _, currentslotwidth := getstringwidth(currentslotcontent)
-                        slotavail := slotwidthmax - currentslotwidth
-                        // if we aren't gonna fit
-                        if charwidth > slotavail {
-                                // advance to next slot
-                                slotidx +=1
-                                slots = append(slots, charstring, )
-                        } else {
-                                // append it
-                                currentslotcontent = fmt.Sprintf("%s%s",currentslotcontent,charstring)
-                                slots[slotidx] = currentslotcontent
-                        }
-                }
-                // add a space if not at end of row and not last word
-                if pad {
-                        if ((slotidx+1)%panelcount != 0) && (ttswidx < ttswordscount -1) {
-                                for si := 0; si < 2; si ++ {
-                                        currentslotcontent = slots[slotidx]
-                                        _, currentslotwidth = getstringwidth(currentslotcontent)
-                                        slotavail = slotwidthmax - currentslotwidth
-                                        if slotavail > periodwidth {
-                                                slots[slotidx] = fmt.Sprintf("%s%s", slots[slotidx], ".")
-                                        }
-                                }
-                        }
-                }
-        }
-        if pad {
-                // fill periods for remaining space in last slot with content
-                slots[slotidx] = addperiodstoend(slots[slotidx], slotwidthmax)
-                // adds periods to fill end of existing slots that trail with two periods
-                for fillslot := 0; fillslot < slotidx; fillslot ++ {
-                        if strings.HasSuffix(slots[fillslot], "..") {
-                                slots[fillslot] = addperiodstoend(slots[fillslot], slotwidthmax)
-                        }
-                }
-                // create additional slots to fill out slotmax
-                for fillslot := slotidx; fillslot < slotmax; fillslot ++ {
-                        slots = append(slots, "............", )
-                }
-        }
+	// Text string to words preparation
+	textToShow_UpperCased := strings.ToUpper(texttoshow) // lowercase not supported for over under text
+	textToShow_Words := strings.Split(textToShow_UpperCased, " ")
+	textToShow_WordsCount := len(textToShow_Words)
 
+	// Process words of the string
+	for textToShowWordIndex, textToShow_UpperCasedword := range textToShow_Words {
+		wordConverted, wordWidth := getStringWidthInPixels(textToShow_UpperCasedword)
+		wordLength := len(wordConverted)
+		// RULE: Advance slot if using alignment mode
+		if align && textToShowWordIndex > 0 {
+			slotIndex += 1
+			slots = append(slots, "")
+		}
+		// determine current slot contents
+		currentSlotContent := slots[slotIndex]
+		_, currentSlotWidth := getStringWidthInPixels(currentSlotContent)
+		// determine available space of slot and row
+		slotWidthAvailable := panelWidth - currentSlotWidth
+		rowWidthAvailable := ((panelCount - (slotIndex % panelCount) - 1) * panelWidth) + slotWidthAvailable
+		// track for two letters to avoid islanding single letter at end of slot
+		twoletterwidth := wordWidth
+		if wordLength >= 2 {
+			_, twoletterwidth = getStringWidthInPixels(textToShow_UpperCasedword[0:2])
+		}
+		// RULE: if small word and not enough space, or any word not enough space in the row.
+		if ((wordLength < 4) && (slotWidthAvailable < wordWidth) && (currentSlotWidth > 0)) ||
+			(slotWidthAvailable < twoletterwidth) ||
+			(rowWidthAvailable < wordWidth) {
+			// advance to next slot
+			if pad {
+				slots[slotIndex] = fillAvailableSpaceWithPeriods(slots[slotIndex], panelWidth)
+			}
+			slotIndex += 1
+			slots = append(slots, "")
+			// RULE: dont break words across rows
+			if (rowWidthAvailable < wordWidth) && (slotIndex%panelCount != 0) {
+				// advance slots as needed for next row
+				for {
+					if pad {
+						slots[slotIndex] = fillAvailableSpaceWithPeriods(slots[slotIndex], panelWidth)
+					}
+					slotIndex += 1
+					slots = append(slots, "")
+					if slotIndex%panelCount == 0 {
+						break
+					} else if pad {
+						slots[slotIndex] = fillAvailableSpaceWithPeriods(slots[slotIndex], panelWidth)
+					}
+				}
+			}
+		} else {
+			// if at end of row and already has content, insert a space
+			if (((slotIndex + 1) % panelCount) == 0) && (currentSlotWidth > 0) && (rowWidthAvailable > convertedSpaceWidth) {
+				fmt.Println("adding a space for end of row slot that has content")
+				slots[slotIndex] = slots[slotIndex] + convertedSpace
+			}
+		}
+		// process characters of this word into slots
+		for charIndex := 0; charIndex < wordLength; charIndex++ {
+			charCurrent := textToShow_UpperCasedword[charIndex]
+			charCurrentInt := int(charCurrent)
+			charString, charWidth := getCharacterWidthInPixels(charCurrentInt)
+			currentSlotContent := slots[slotIndex]
+			_, currentSlotWidth := getStringWidthInPixels(currentSlotContent)
+			slotWidthAvailable := panelWidth - currentSlotWidth
+			// if we do not fit
+			if charWidth > slotWidthAvailable {
+				// advance to next slot
+				slotIndex += 1
+				slots = append(slots, charString)
+			} else {
+				// append to current slot
+				currentSlotContent = currentSlotContent + charString
+				slots[slotIndex] = currentSlotContent
+			}
+		}
+		// add a space if not at end of row and not last word
+		if pad {
+			slotIsNotLastPanel := ((slotIndex+1)%panelCount != 0)
+			notLastWord := (textToShowWordIndex < textToShow_WordsCount-1)
+			if slotIsNotLastPanel && notLastWord {
+				// add whatever we can fit of a converted space
+				for si := 0; si < len(convertedSpace); si++ {
+					currentSlotContent = slots[slotIndex]
+					_, currentSlotWidth = getStringWidthInPixels(currentSlotContent)
+					slotWidthAvailable = panelWidth - currentSlotWidth
+					convertedCharacter, convertedCharacterWidth := getCharacterWidthInPixels(int(convertedSpace[si]))
+					if slotWidthAvailable > convertedCharacterWidth {
+						slots[slotIndex] = slots[slotIndex] + convertedCharacter
+					} else {
+						break
+					}
+				}
+			}
+		}
+	} // Done processing words
 
-        // render to blockclock =======================================================================================
-        slotcount := len(slots)
-        if slotcount < slotmax {
-                slotmax = slotcount
-        }
-        if debug {
-                fmt.Println("Debug results for this text string")
-                fmt.Println("---------------------------------------------------------------------------------------")
-                fmt.Println(" slot      over            under       url")
-        }
-        for i := 0; i < slotmax && i < panelcount; i++ {
-                otext := slots[i]
-                utext := ""
-                if (i+panelcount) < slotmax {
-                        utext = slots[i+panelcount]
-                }
-                url := fmt.Sprintf("http://%s/api/ou_text/%d/%s/%s", blockclockip, i, otext, utext)
-                if debug {
-                        fmt.Println(fmt.Sprintf("%5d  %-14s  %-14s  %s", i, otext, utext, url))
-                } else {
-                        _, err := http.Get(url)
-                        if err != nil {
-                                log.Fatalln(err)
-                        }
-                }
-        }
+	// Pad slots as needed
+	if pad {
+		// fill periods for remaining space in last slot with content
+		slots[slotIndex] = fillAvailableSpaceWithPeriods(slots[slotIndex], panelWidth)
+		// adds periods to fill end of existing slots that trail with spaces
+		for fillslot := 0; fillslot < slotIndex; fillslot++ {
+			if strings.HasSuffix(slots[fillslot], convertedSpace) {
+				slots[fillslot] = fillAvailableSpaceWithPeriods(slots[fillslot], panelWidth)
+			}
+		}
+		// create additional slots to fill out slotMax
+		for fillslot := slotIndex; fillslot < slotMax; fillslot++ {
+			slots = append(slots, "............")
+		}
+	}
+
+	// display output
+	if debug {
+		renderDebugOutput(&slots, panelCount)
+	} else {
+		renderToBlockclock(&slots, panelCount)
+	}
 }
